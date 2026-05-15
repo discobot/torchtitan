@@ -14,7 +14,6 @@ Requires a CUDA GPU. Run with:
 """
 
 import copy
-import tempfile
 import unittest
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -30,11 +29,15 @@ from torchtitan.components.tokenizer import HuggingFaceTokenizer
 from torchtitan.experiments.graph_trainer.common_utils import (
     maybe_register_blockmask_pytree_node,
 )
+from torchtitan.experiments.graph_trainer.configs import GraphTrainerCompileConfig
 from torchtitan.experiments.graph_trainer.deepseek_v3 import (
     model_registry as dsv3_model_registry,
 )
 from torchtitan.experiments.graph_trainer.deepseek_v3.parallelize import (
     annotate_deepseekv3,
+)
+from torchtitan.experiments.graph_trainer.ep_eager_chunk import (
+    apply_ep_overlap_eager_chunking,
 )
 from torchtitan.experiments.graph_trainer.llama3 import (
     model_registry as llama3_model_registry,
@@ -147,6 +150,10 @@ class BitwiseDeterministicBase(unittest.TestCase):
         trainer_cls: type,
         *,
         enable_passes: bool = True,
+        compile_passes: list[str] | None = None,
+        compile_ep_overlap_chunk_dim: str = "batch",
+        compile_ep_overlap_module_fqn: str = "layers.*",
+        compile_ep_overlap_disable_early_grad_accumulation: bool = False,
         numerics_changing_optim: bool = False,
     ) -> tuple[torch.Tensor, str, str]:
         """Run forward-backward-optimizer steps using the given trainer class."""
@@ -158,6 +165,12 @@ class BitwiseDeterministicBase(unittest.TestCase):
             self.model_config,
             trainer_cls,
             compile_enable_passes=enable_passes,
+            compile_passes=compile_passes,
+            compile_ep_overlap_chunk_dim=compile_ep_overlap_chunk_dim,
+            compile_ep_overlap_module_fqn=compile_ep_overlap_module_fqn,
+            compile_ep_overlap_disable_early_grad_accumulation=(
+                compile_ep_overlap_disable_early_grad_accumulation
+            ),
             compile_numerics_changing_optim=numerics_changing_optim,
             tokenizer=HuggingFaceTokenizer(tokenizer_path=_TOKENIZER_PATH),
         )
@@ -391,6 +404,26 @@ class TestDSv3BitwiseDeterministic(BitwiseDeterministicBase):
     model_flavor = "debugmodel"
     annotate_model = staticmethod(annotate_deepseekv3)
 
+    def _wrap_ep_chunk_eager_baseline(self, model: nn.Module, case: str) -> None:
+        if case == "transformer_batch":
+            mode, module_fqn = "batch", "layers.*"
+        elif case == "moe_batch":
+            mode, module_fqn = "batch", "layers.*.moe"
+        elif case == "moe_seq":
+            mode, module_fqn = "seq", "layers.*.moe"
+        else:
+            raise AssertionError(f"unknown EP chunk case {case}")
+        apply_ep_overlap_eager_chunking(
+            model,
+            GraphTrainerCompileConfig(
+                enable=True,
+                passes=["ep_overlap"],
+                ep_overlap_chunk_strategy="eager",
+                ep_overlap_chunk_dim=mode,
+                ep_overlap_module_fqn=module_fqn,
+            ),
+        )
+
     @unittest.skip(
         "Eager self-determinism hashes drift across nightly PyTorch updates; "
         "skipped instead of re-baselining. The aot_fx_trace-vs-eager tests "
@@ -450,6 +483,44 @@ class TestDSv3BitwiseDeterministic(BitwiseDeterministicBase):
         )
 
         self._assert_runs_match(run_a, run_b, "numerics_changing_optim run-to-run: ")
+
+    @unittest.skipUnless(
+        has_cuda_capability(9, 0), "Numerics only match on H100 (sm_90+)"
+    )
+    def test_ep_chunk_matches_eager_chunking_bitwise(self):
+        """Fast single-GPU prerequisite for EP chunking distributed numerics.
+
+        This validates chunking logic, pass composability, and eager-chunked vs.
+        graph-chunked numerics. It does not exercise real EP all-to-all
+        communication, distributed sharding, or overlap behavior; the
+        distributed DSV3 numerics tests provide that end-to-end coverage.
+        """
+        cases = [
+            ("transformer_batch", "batch", "layers.*"),
+            ("moe_batch", "batch", "layers.*.moe"),
+            ("moe_seq", "seq", "layers.*.moe"),
+        ]
+        for case, mode, modules in cases:
+            with self.subTest(case=case):
+                eager_model = copy.deepcopy(self.model)
+                graph_model = copy.deepcopy(self.model)
+                self._wrap_ep_chunk_eager_baseline(eager_model, case)
+
+                run_eager = self._run_steps(eager_model, Trainer)
+                run_traced = self._run_steps(
+                    graph_model,
+                    GraphTrainer,
+                    compile_passes=["ep_overlap"],
+                    compile_ep_overlap_chunk_dim=mode,
+                    compile_ep_overlap_module_fqn=modules,
+                    compile_ep_overlap_disable_early_grad_accumulation=True,
+                )
+
+                self._assert_runs_match(
+                    run_eager,
+                    run_traced,
+                    f"eager chunk vs ep_chunk {case}: ",
+                )
 
 
 class TestLlama3FlexAttnBitwiseDeterministic(BitwiseDeterministicBase):

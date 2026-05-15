@@ -24,6 +24,10 @@ def build_minimal_trainer(
     activation_checkpoint_mode: str = "none",
     compile_enable_passes: bool = True,
     compile_passes: list[str] | None = None,
+    compile_ep_overlap_chunk_dim: str = "batch",
+    compile_ep_overlap_chunk_strategy: str = "graph",
+    compile_ep_overlap_module_fqn: str = "layers.*",
+    compile_ep_overlap_disable_early_grad_accumulation: bool = False,
     compile_numerics_changing_optim: bool = False,
     tokenizer=None,
     fsdp_reshard_after_forward: str = "default",
@@ -55,6 +59,12 @@ def build_minimal_trainer(
                 cpu_offload_prefetch_n_layers=1,
                 cpu_offload_defer_n_layers=1,
                 cpu_offload_budget_gb=100.0,
+                ep_overlap_chunk_dim=compile_ep_overlap_chunk_dim,
+                ep_overlap_chunk_strategy=compile_ep_overlap_chunk_strategy,
+                ep_overlap_module_fqn=compile_ep_overlap_module_fqn,
+                ep_overlap_disable_early_grad_accumulation=(
+                    compile_ep_overlap_disable_early_grad_accumulation
+                ),
             ),
             model_spec=SimpleNamespace(model=model_config),
             activation_checkpoint=ActivationCheckpointConfig(

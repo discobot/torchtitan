@@ -243,13 +243,13 @@ def _build_llama3_tests() -> list[OverrideDefinitions]:
                     "--module graph_trainer.llama3",
                     "--config graph_trainer_llama3_debugmodel",
                     "--compile.mode aot_fx_trace",
-                    "--compile.inductor_compilation full",
+                    "--compile.inductor_compilation regional",
                     "--parallelism.data_parallel_shard_degree 4",
                     "--parallelism.tensor_parallel_degree 2",
                 ],
             ],
-            "aot_fx_trace llama3 FSDP+TP+full_inductor",
-            "aot_fx_trace_llama3_fsdp_tp_full_inductor",
+            "aot_fx_trace llama3 FSDP+TP+regional_inductor",
+            "aot_fx_trace_llama3_fsdp_tp_regional_inductor",
             ngpu=8,
         ),
     ]
@@ -257,6 +257,57 @@ def _build_llama3_tests() -> list[OverrideDefinitions]:
 
 def _build_deepseek_v3_tests() -> list[OverrideDefinitions]:
     """DeepSeek-v3-based integration tests (require H100 machines)."""
+    ep_overlap_regional_inductor_tests = [
+        (
+            "SDPA",
+            "graph_trainer_deepseek_v3_debugmodel_ep",
+            "graph",
+            "batch",
+            "layers.*",
+            "transformer_batch",
+        ),
+        (
+            "SDPA",
+            "graph_trainer_deepseek_v3_debugmodel_ep",
+            "graph",
+            "batch",
+            "layers.*.moe",
+            "moe_batch",
+        ),
+        (
+            "SDPA",
+            "graph_trainer_deepseek_v3_debugmodel_ep",
+            "graph",
+            "seq",
+            "layers.*.moe",
+            "moe_seq",
+        ),
+        (
+            "SDPA",
+            "graph_trainer_deepseek_v3_debugmodel_ep",
+            "eager",
+            "batch",
+            "layers.*",
+            "eager_transformer_batch",
+        ),
+    ]
+    ep_overlap_regional_flex_tests = [
+        ("graph", "seq", "layers.*.moe", "moe_seq"),
+    ]
+
+    def ep_overlap_parallelism(strategy: str) -> list[str]:
+        if strategy == "graph":
+            return [
+                "--parallelism.data_parallel_shard_degree 8",
+                "--parallelism.tensor_parallel_degree 1",
+                "--parallelism.expert_parallel_degree 4",
+            ]
+        return [
+            "--parallelism.data_parallel_shard_degree 4",
+            "--parallelism.tensor_parallel_degree 2",
+            "--parallelism.expert_parallel_degree 4",
+        ]
+
     return [
         # === JIT mode tests ===
         OverrideDefinitions(
@@ -357,16 +408,68 @@ def _build_deepseek_v3_tests() -> list[OverrideDefinitions]:
                     "--module graph_trainer.deepseek_v3",
                     "--config graph_trainer_deepseek_v3_debugmodel",
                     "--compile.mode aot_fx_trace",
-                    "--compile.inductor_compilation full",
+                    "--compile.inductor_compilation regional",
                     "--parallelism.data_parallel_shard_degree 4",
                     "--parallelism.tensor_parallel_degree 2",
                     "--parallelism.expert_parallel_degree 4",
                 ],
             ],
-            "aot_fx_trace deepseek_v3 FSDP+TP+EP+full_inductor",
-            "aot_fx_trace_deepseek_v3_fsdp_tp_ep_full_inductor",
+            "aot_fx_trace deepseek_v3 FSDP+TP+EP+regional_inductor",
+            "aot_fx_trace_deepseek_v3_fsdp_tp_ep_regional_inductor",
             ngpu=8,
         ),
+        *[
+            OverrideDefinitions(
+                [
+                    [
+                        "--module graph_trainer.deepseek_v3",
+                        f"--config {config}",
+                        "--compile.mode aot_fx_trace",
+                        "--compile.inductor_compilation regional",
+                        "--compile.passes ep_overlap",
+                        f"--compile.ep_overlap_chunk_strategy {strategy}",
+                        f"--compile.ep_overlap_chunk_dim {mode}",
+                        f"--compile.ep_overlap_module_fqn {modules}",
+                        *(
+                            ["--compile.enable_fsdp_dense_region_overlap"]
+                            if strategy == "graph" and modules == "layers.*.moe"
+                            else []
+                        ),
+                        *ep_overlap_parallelism(strategy),
+                    ],
+                ],
+                f"aot_fx_trace deepseek_v3 {backend} regional_inductor ep_overlap {variant}",
+                f"aot_fx_trace_deepseek_v3_{backend.lower()}_regional_inductor_ep_overlap_{variant}",
+                ngpu=8,
+            )
+            for backend, config, strategy, mode, modules, variant in ep_overlap_regional_inductor_tests
+        ],
+        *[
+            OverrideDefinitions(
+                [
+                    [
+                        "--module graph_trainer.deepseek_v3",
+                        "--config graph_trainer_deepseek_v3_debugmodel_flex_attn_ep",
+                        "--compile.mode aot_fx_trace",
+                        "--compile.inductor_compilation regional",
+                        "--compile.passes ep_overlap",
+                        f"--compile.ep_overlap_chunk_strategy {strategy}",
+                        f"--compile.ep_overlap_chunk_dim {mode}",
+                        f"--compile.ep_overlap_module_fqn {modules}",
+                        *(
+                            ["--compile.enable_fsdp_dense_region_overlap"]
+                            if strategy == "graph" and modules == "layers.*.moe"
+                            else []
+                        ),
+                        *ep_overlap_parallelism(strategy),
+                    ],
+                ],
+                f"aot_fx_trace deepseek_v3 FlexAttn regional ep_overlap {variant}",
+                f"aot_fx_trace_deepseek_v3_flexattn_regional_ep_overlap_{variant}",
+                ngpu=8,
+            )
+            for strategy, mode, modules, variant in ep_overlap_regional_flex_tests
+        ],
         OverrideDefinitions(
             [
                 [

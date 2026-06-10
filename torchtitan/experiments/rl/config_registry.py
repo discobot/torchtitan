@@ -327,6 +327,9 @@ def rl_grpo_qwen3_moe_debug_ep() -> RLTrainer.Config:
     Generator uses TP=2 for dense layers and EP=2 for MoE experts.
     The RL loop auto-rebuilds the model spec with AllToAllTokenDispatcher
     when generator EP > 1.
+
+    Generate the debug checkpoint with:
+        python scripts/create_debug_moe_ckpt.py
     """
     group_size = 8
     return RLTrainer.Config(
@@ -354,9 +357,10 @@ def rl_grpo_qwen3_moe_debug_ep() -> RLTrainer.Config:
             training=TrainingConfig(),
             parallelism=ParallelismConfig(
                 data_parallel_shard_degree=1,
-                tensor_parallel_degree=1,
+                tensor_parallel_degree=2,
                 data_parallel_replicate_degree=1,
                 disable_loss_parallel=True,
+                expert_parallel_degree=2,
             ),
             checkpoint=CheckpointManager.Config(
                 enable=False,

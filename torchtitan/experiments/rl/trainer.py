@@ -844,6 +844,11 @@ class RLTrainer(Configurable):
         num_samples = self.config.num_validation_samples
         greedy = replace(self._sampling, temperature=0.0, top_p=1.0)
 
+        # Score the SAME fixed held-out set every pass: reset the validation
+        # dataset so the eval trend is comparable across steps (otherwise the
+        # iterator advances and each pass scores a different subset).
+        self._rollouter.reset_validation()
+
         rollout_groups, validation_metrics = await self._collect_rollouts(
             is_validation=True,
             num_groups=num_samples,

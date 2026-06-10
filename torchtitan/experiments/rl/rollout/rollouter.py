@@ -70,6 +70,7 @@ class Rollouter(Configurable):
 
     def __init__(self, config: Config) -> None:
         self._train_dataset = config.train_dataset.build()
+        self._validation_dataset_config = config.validation_dataset
         self._validation_dataset = config.validation_dataset.build()
         self.rubric: Rubric = config.rubric.build()
         self._message_env_config = config.message_env
@@ -83,6 +84,14 @@ class Rollouter(Configurable):
     def get_validation_sample(self) -> object:
         """Get one validation sample (the env input) from the validation dataset."""
         return next(self._validation_dataset)
+
+    def reset_validation(self) -> None:
+        """Rebuild the validation dataset so each validation pass scores the SAME
+        fixed set of held-out prompts (the seeded dataset yields a deterministic
+        order). Without this the iterator advances across passes, so every eval
+        would score a different subset — making the eval trend non-comparable.
+        """
+        self._validation_dataset = self._validation_dataset_config.build()
 
     # TODO: revisit the Renderer being injected into `make_env_group` once we
     # know whether Rollouter should own a Renderer (per-rollouter chat templates).

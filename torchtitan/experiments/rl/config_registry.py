@@ -328,6 +328,26 @@ def rl_grpo_qwen3_1_7b_search_r1() -> RLTrainer.Config:
             stop=["</search>", "</answer>"],
         ),
     )
+    # Anti-collapse stabilizers ported from slime: KL-to-reference (low_var_kl,
+    # coef 0.001) keeps the policy near the base model so it doesn't collapse to a
+    # degenerate "bare terse answer" mode; clip-higher (0.2/0.28) preserves entropy.
+    # lr 1e-6 constant (slime). Trainer on 1 GPU (TP=1); generator gets 4 (TP=4).
+    config.trainer = dataclasses.replace(
+        config.trainer,
+        loss=GRPOLoss.Config(
+            clip_eps=0.2,
+            clip_eps_high=0.28,
+            kl_coef=0.001,
+            kl_loss_type="low_var_kl",
+        ),
+        optimizer=default_adamw(lr=1e-6),
+        lr_scheduler=LRSchedulersContainer.Config(
+            warmup_steps=2, decay_type="linear", min_lr_factor=1.0
+        ),
+        parallelism=dataclasses.replace(
+            config.trainer.parallelism, tensor_parallel_degree=1
+        ),
+    )
     config.num_groups_per_rollout_batch = (
         8  # 8 prompts x group_size 8 = 64 rollouts/step
     )

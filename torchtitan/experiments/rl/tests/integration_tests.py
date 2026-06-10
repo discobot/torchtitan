@@ -71,6 +71,29 @@ def build_rl_test_list() -> list[OverrideDefinitions]:
             "rl_grpo_tp2_compile",
             ngpu=4,
         ),
+        OverrideDefinitions(
+            [
+                [
+                    "--module rl",
+                    "--config rl_grpo_qwen3_0_6b_varlen",
+                    "--num_generators 2",
+                    "--trainer.parallelism.tensor_parallel_degree 2",
+                    "--generator.parallelism.tensor_parallel_degree 1",
+                    "--group_size 2",
+                    "--batcher.batch.seq_len 1024",
+                    "--renderer.enable-thinking False",
+                    "--generator.sampling.max_tokens 256",
+                    "--trainer.debug.no_batch_invariant",
+                    "--generator.debug.no_batch_invariant",
+                    "--compile.no-enable",
+                    "--generator.cudagraph.no-enable",
+                    "--metrics.no-enable-wandb",
+                ],
+            ],
+            "RL GRPO 2 generators TP=1 no compile",
+            "rl_grpo_2gen_tp1_no_compile",
+            ngpu=4,
+        ),
     ]
 
 

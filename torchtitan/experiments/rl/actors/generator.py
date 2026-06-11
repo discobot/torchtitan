@@ -479,9 +479,7 @@ class VLLMGenerator(Actor, Configurable):
                 seed=self.config.debug.seed,
                 # NOTE: logprobs=0 -> vLLM returns the sampled token's logprob
                 # only (no top-k alternatives), which is exactly what RL compares
-                # against the trainer's recompute. logprobs=None returns no
-                # logprobs at all; logprobs>=1 also returns the top-k, which RL
-                # ignores.
+                # against the trainer's recompute.
                 logprobs=0,
                 output_kind=RequestOutputKind.FINAL_ONLY,
             )

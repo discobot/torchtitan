@@ -7,10 +7,7 @@
 from dataclasses import dataclass
 
 import torch
-from torch.distributed._functional_collectives import (
-    all_to_all_single,
-    all_to_all_single_autograd,
-)
+from torch.distributed._functional_collectives import all_to_all_single
 from torch.distributed.tensor import DeviceMesh
 
 from torchtitan.config import Configurable
@@ -302,8 +299,8 @@ class AllToAllTokenDispatcher(LocalTokenDispatcher):
             input_splits_list = input_splits.tolist()
             output_splits_list = output_splits.tolist()
 
-        # All-to-all dispatch tokens to EP ranks
-        routed_input_RD = all_to_all_single_autograd(
+        # All-to-all dispatch tokens to EP ranks.
+        routed_input_RD = all_to_all_single(
             routed_input_ND,
             output_splits_list,
             input_splits_list,
@@ -442,7 +439,7 @@ class AllToAllTokenDispatcher(LocalTokenDispatcher):
 
         # All-to-all combine: returns AsyncCollectiveTensor — the a2a runs
         # on the NCCL stream and won't block until the tensor is accessed.
-        routed_output_RD = all_to_all_single_autograd(
+        routed_output_RD = all_to_all_single(
             routed_output_RD,
             metadata.input_splits,
             metadata.output_splits,

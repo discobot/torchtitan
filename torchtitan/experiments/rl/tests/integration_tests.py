@@ -76,9 +76,9 @@ def build_rl_test_list() -> list[OverrideDefinitions]:
                 [
                     "--module rl",
                     "--config rl_grpo_qwen3_0_6b_varlen",
-                    "--num_generators 2",
+                    "--num_generators 3",
                     "--trainer.parallelism.tensor_parallel_degree 2",
-                    "--generator.parallelism.tensor_parallel_degree 1",
+                    "--generator.parallelism.tensor_parallel_degree 2",
                     "--group_size 2",
                     "--batcher.batch.seq_len 1024",
                     "--renderer.enable-thinking False",
@@ -90,9 +90,9 @@ def build_rl_test_list() -> list[OverrideDefinitions]:
                     "--metrics.no-enable-wandb",
                 ],
             ],
-            "RL GRPO 2 generators TP=1 no compile",
-            "rl_grpo_2gen_tp1_no_compile",
-            ngpu=4,
+            "RL GRPO 3 generators TP=2 no compile",
+            "rl_grpo_3gen_tp2_no_compile",
+            ngpu=8,
         ),
     ]
 

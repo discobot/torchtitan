@@ -94,7 +94,7 @@ jobs:
         # but the CI docker image only has CUDA runtime, not the toolkit.
         uv pip install nvidia-cuda-nvcc
 
-        # Run E2E RL integration tests (TP=2 on 4 GPUs)
+        # Run E2E RL integration tests. Requires the runner to have 8 GPUs.
         python -m torchtitan.experiments.rl.tests.integration_tests \
-          $RUNNER_TEMP/artifacts-to-be-uploaded --ngpu 4 \
+          $RUNNER_TEMP/artifacts-to-be-uploaded --ngpu 8 \
           --hf_assets_path "$MODEL_PATH"

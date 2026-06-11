@@ -1,11 +1,11 @@
-name: RL Integration Tests
+name: RL 8-GPU Integration Tests
 
 on:
   push:
     branches: [ main ]
     paths:
       - 'torchtitan/experiments/rl/**'
-      - '.github/workflows/integration_test_4gpu_rl.yaml'
+      - '.github/workflows/integration_test_8gpu_rl.yaml'
   pull_request:
     types: [labeled, synchronize]
     branches: [ main ]
@@ -94,7 +94,9 @@ jobs:
         # but the CI docker image only has CUDA runtime, not the toolkit.
         uv pip install nvidia-cuda-nvcc
 
-        # Run E2E RL integration tests (TP=2 on 4 GPUs).
+        # Run the E2E RL multi-generator integration test, which exercises the
+        # GeneratorRouter across multiple generators
+        # (3 generators TP=2 + trainer TP=2 = 8 GPUs).
         python -m torchtitan.experiments.rl.tests.integration_tests \
-          $RUNNER_TEMP/artifacts-to-be-uploaded --ngpu 4 \
+          $RUNNER_TEMP/artifacts-to-be-uploaded --test_suite 8gpu --ngpu 8 \
           --hf_assets_path "$MODEL_PATH"

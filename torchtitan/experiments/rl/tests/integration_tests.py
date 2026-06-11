@@ -71,6 +71,11 @@ def build_rl_test_list() -> list[OverrideDefinitions]:
             "rl_grpo_tp2_compile",
             ngpu=4,
         ),
+    ]
+
+
+def build_rl_8gpu_test_list() -> list[OverrideDefinitions]:
+    return [
         OverrideDefinitions(
             [
                 [
@@ -120,6 +125,7 @@ def build_rl_h100_test_list() -> list[OverrideDefinitions]:
 
 _TEST_SUITES = {
     "default": build_rl_test_list,
+    "8gpu": build_rl_8gpu_test_list,
     "h100": build_rl_h100_test_list,
 }
 

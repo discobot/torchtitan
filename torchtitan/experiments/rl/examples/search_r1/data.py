@@ -54,6 +54,12 @@ class SearchR1Dataset(Configurable):
         The merged Search-R1 test split mixes 7 datasets; use this to evaluate on a
         single benchmark like slime. ``None`` keeps all rows."""
 
+        shuffle: bool = True
+        """Shuffle row order (with ``seed``) and reshuffle on each wrap. Set False
+        for validation to read rows in file order, so the first N rows match slime's
+        ``--eval-prompt-data nq_test test.parquet@[0:N]`` exactly (apples-to-apples
+        NQ EM)."""
+
     def __init__(self, config: Config) -> None:
         columns = ["question", "golden_answers"]
         if config.data_source is not None:
@@ -74,8 +80,10 @@ class SearchR1Dataset(Configurable):
             raise ValueError(f"no rows found in {config.data_path}")
 
         self._rng = random.Random(config.seed)
+        self._shuffle = config.shuffle
         self._order = list(range(len(self._questions)))
-        self._rng.shuffle(self._order)
+        if self._shuffle:
+            self._rng.shuffle(self._order)
         self._pos = 0
 
     def __iter__(self) -> Iterator[SearchR1Example]:
@@ -83,7 +91,8 @@ class SearchR1Dataset(Configurable):
 
     def __next__(self) -> SearchR1Example:
         if self._pos >= len(self._order):
-            self._rng.shuffle(self._order)
+            if self._shuffle:
+                self._rng.shuffle(self._order)
             self._pos = 0
         idx = self._order[self._pos]
         self._pos += 1

@@ -342,6 +342,21 @@ class RLTrainer(Configurable):
         # TODO(continuous-batching): this knob exists because we collect to a token budget
         # in discrete sync batches; async/continuous batching streams may change this logic
 
+        dynamic_sampling: bool = False
+        """DAPO-style dynamic sampling. Drop groups whose siblings all get the same
+        reward (zero reward std -> all advantages 0 -> no gradient) and keep collecting
+        more rollout batches to refill the train batch with groups that carry a learning
+        signal. Only the kept groups' tokens count toward the token target, so the
+        controller automatically oversamples. Improves sample efficiency when many
+        groups are all-correct or all-wrong. Bounded by `max_rollout_batches_per_step`."""
+
+        max_rollout_batches_per_step: int | None = None
+        """Cap on rollout batches collected per train step (each batch collects
+        `num_groups_per_rollout_batch` groups). `None` collects until the token target
+        is met. Acts as a safeguard with `dynamic_sampling` so a step whose groups are
+        mostly zero-std cannot oversample without bound; on hitting the cap the step
+        trains on whatever was collected."""
+
         group_size: int = 8
         """Sibling rollouts sampled per dataset row (the GRPO group). The generator
         is always called with `n=1`; prompts are pre-expanded by `group_size`."""
@@ -816,6 +831,24 @@ class RLTrainer(Configurable):
             )
 
     @staticmethod
+    def _group_reward_std(group: RolloutGroup) -> float | None:
+        """Population std of a group's sibling rewards, or ``None`` if the group is
+        untrainable (a sibling has no assistant tokens or no reward).
+
+        A std of 0.0 means every sibling got the same reward, so all mean-baseline
+        advantages are 0 — the group carries no learning signal and `dynamic_sampling`
+        drops it.
+        """
+        if any(
+            not rollout.turns
+            or not rollout.turns[0].completion_token_ids
+            or rollout.reward is None
+            for rollout in group.rollouts
+        ):
+            return None
+        return statistics.pstdev([rollout.reward for rollout in group.rollouts])
+
+    @staticmethod
     @sl.log_trace_span("_build_episodes")
     def _build_episodes(
         rollout_groups: list[RolloutGroup],
@@ -837,10 +870,8 @@ class RLTrainer(Configurable):
         for group in rollout_groups:
             # Drop the whole group if any sibling has no trainable tokens; we
             # need one turn with assistant tokens to build an episode.
-            if any(
-                not rollout.turns or not rollout.turns[0].completion_token_ids
-                for rollout in group.rollouts
-            ):
+            group_std = RLTrainer._group_reward_std(group)
+            if group_std is None:
                 logger.warning(
                     "group %s has an untrainable rollout; dropping the group",
                     group.group_id,
@@ -849,7 +880,7 @@ class RLTrainer(Configurable):
 
             rewards = [rollout.reward for rollout in group.rollouts]
             group_mean = sum(rewards) / len(rewards)
-            group_stds.append(statistics.pstdev(rewards))
+            group_stds.append(group_std)
 
             for rollout in group.rollouts:
                 rollout.advantage = rollout.reward - group_mean
@@ -966,12 +997,25 @@ class RLTrainer(Configurable):
             rollout_metrics: list[m.Metric] = []
             collected_tokens = 0
             group_offset = 0
+            num_rollout_batches = 0
+            num_groups_filtered = 0
+            max_batches = self.config.max_rollout_batches_per_step
             # num_tokens_target (= global_batch_size * seq_len) is the stop
             # condition for collected tokens before a train step can proceed.
             # NOTE: this is a proxy — packing adds padding to fill fixed-length
             # rows, so actual token consumption may exceed collected_tokens.
             num_tokens_target = self.batcher.num_tokens_target(self.trainer_dp_degree)
             while collected_tokens < num_tokens_target:
+                if max_batches is not None and num_rollout_batches >= max_batches:
+                    logger.warning(
+                        "step %d hit max_rollout_batches_per_step=%d before the token "
+                        "target (%d/%d tokens collected); training on what was gathered",
+                        step,
+                        max_batches,
+                        collected_tokens,
+                        num_tokens_target,
+                    )
+                    break
                 new_rollout_groups, new_metrics = await self._collect_rollouts(
                     is_validation=False,
                     num_groups=num_groups,
@@ -980,9 +1024,20 @@ class RLTrainer(Configurable):
                     step=step,
                     group_offset=group_offset,
                 )
-                rollout_groups.extend(new_rollout_groups)
                 rollout_metrics.extend(new_metrics)
-                # Both prompt length and completion length are counted.
+                # DAPO dynamic sampling: keep only groups with reward spread (non-zero
+                # advantage); the token budget then oversamples further batches to
+                # refill. Untrainable groups (std None) are dropped here too.
+                if self.config.dynamic_sampling:
+                    kept = [
+                        group
+                        for group in new_rollout_groups
+                        if (RLTrainer._group_reward_std(group) or 0.0) > 0.0
+                    ]
+                    num_groups_filtered += len(new_rollout_groups) - len(kept)
+                    new_rollout_groups = kept
+                rollout_groups.extend(new_rollout_groups)
+                # Both prompt length and completion length are counted (kept groups only).
                 collected_tokens += sum(
                     len(t.prompt_token_ids) + len(t.completion_token_ids) - 1
                     for group in new_rollout_groups
@@ -990,8 +1045,20 @@ class RLTrainer(Configurable):
                     for t in r.turns
                 )
                 group_offset += num_groups
+                num_rollout_batches += 1
 
             episodes, episode_metrics = self._build_episodes(rollout_groups)
+            if self.config.dynamic_sampling:
+                episode_metrics += [
+                    m.Metric(
+                        "rollout/dynamic_sampling/groups_filtered",
+                        m.NoReduce(float(num_groups_filtered)),
+                    ),
+                    m.Metric(
+                        "rollout/dynamic_sampling/rollout_batches",
+                        m.NoReduce(float(num_rollout_batches)),
+                    ),
+                ]
             t_rollout_s = time.perf_counter() - t_rollout_start
 
             if self.config.log_samples:

@@ -16,7 +16,14 @@ masks retrieved (env-injected) tokens out of the GRPO loss
 - `data.py` — `SearchR1Dataset` / `SearchR1Example`: reads the Search-R1 NQ/HotpotQA parquet.
 - `env.py` — `SearchR1Env(MessageEnv)`: text-tag `<search>`/`<answer>` protocol, injects `<information>`.
 - `retrieval.py` — async client for the local dense retrieval server.
-- `rubric.py` — `RewardAnswerEM` (EM) + `RewardFormat`.
+- `rubric.py` — `RewardSearchR1` (slime/Search-R1 `compute_score_em`). **Default =
+  slime's pure-EM 0/1** (correct answer → 1.0, else 0). Opt into the fine-grained
+  graded reward by setting the sub-scores > 0
+  (`structure_format_score=0.2, retrieval_score=0.1, final_format_score=0.1`): it adds
+  a `<think>→<search>→<information>→<answer>` format state-machine + retrieval-correctness
+  credit, so a bare correct answer (0.8) scores less than a searched one (1.0) and the
+  policy can't reward-hack by skipping search. `RewardAnswerEM` is a metric-only (weight 0)
+  pure-EM signal.
 - `rollouter.py` — wires datasets + env + rubric; `token_env.max_num_turns` bounds turns.
 
 ## Prerequisites

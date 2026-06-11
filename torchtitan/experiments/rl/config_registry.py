@@ -295,8 +295,13 @@ def rl_grpo_qwen3_0_6b_search_r1() -> RLTrainer.Config:
 
 
 def rl_grpo_qwen3_1_7b_search_r1() -> RLTrainer.Config:
-    """GRPO Search-R1 (multi-turn retrieval QA) for Qwen3-1.7B, varlen attention
-    (4 GPUs: 2 gen + 2 train, both TP=2).
+    """GRPO Search-R1 (multi-turn retrieval QA) for Qwen3-1.7B, varlen attention.
+
+    Reproduces slime's ``examples/search-r1`` nq_test EM curve (~0.10 -> ~0.28+):
+    **pure-EM 0/1 reward** (the rollouter's default rubric — no format/retrieval
+    weighting, matching slime), clip-higher (0.2/0.28), KL-to-reference (low_var_kl,
+    0.001), AdamW lr 1e-6 constant, temperature 1.0, max 4 search turns, 500 steps.
+    6 GPUs: 4 gen (TP=4) + 1 train (TP=1) + 1 for the retriever.
 
     Requires a running local dense retrieval server and the Search-R1 NQ/HotpotQA
     parquet data; see ``examples/search_r1/README.md``.
@@ -304,34 +309,27 @@ def rl_grpo_qwen3_1_7b_search_r1() -> RLTrainer.Config:
     config = rl_grpo_qwen3_1_7b()
     config.rollouter = SearchR1Rollouter.Config()
     config.renderer = RendererConfig(name="qwen3", enable_thinking=False)
-    # Small batch (global_batch_size=16) — enough to see the NQ EM trend and much
-    # faster than slime's 256. seq_len 4096 fits the multi-turn rollouts. (The
-    # earlier batch-size NaNs were the vLLM non-finite-logprob bug, now filtered.)
+    # seq_len 4096 fits the multi-turn rollouts; global_batch_size=32 packed rows.
     config.batcher = dataclasses.replace(
         config.batcher,
-        batch=BatchConfig(local_batch_size=1, global_batch_size=16, seq_len=4096),
+        batch=BatchConfig(local_batch_size=1, global_batch_size=32, seq_len=4096),
     )
-    # 4 generator GPUs (TP=4) + 2 trainer GPUs (TP=2) = 6 GPUs (slime's layout);
-    # 4 gen GPUs ~halve rollout time vs TP=2. Optimizer/LR inherited from
-    # rl_grpo_qwen3_1_7b (AdamW 2e-6, warmup + linear decay).
+    # 4 generator GPUs (TP=4) + 1 trainer GPU (TP=1) + retriever = 6 GPUs.
     config.generator = dataclasses.replace(
         config.generator,
         parallelism=dataclasses.replace(
             config.generator.parallelism, tensor_parallel_degree=4
         ),
         sampling=SamplingConfig(
-            # slime uses temperature 1.0; 0.8 here is conservative. (The temp-1.0
-            # NaN was the same vLLM logprob bug, now fixed, so 1.0 is also viable.)
-            temperature=0.8,
-            top_p=0.95,
+            # slime: temperature 1.0 + top_p 1.0 (no nucleus truncation).
+            temperature=1.0,
+            top_p=1.0,
             max_tokens=512,
             stop=["</search>", "</answer>"],
         ),
     )
-    # Anti-collapse stabilizers ported from slime: KL-to-reference (low_var_kl,
-    # coef 0.001) keeps the policy near the base model so it doesn't collapse to a
-    # degenerate "bare terse answer" mode; clip-higher (0.2/0.28) preserves entropy.
-    # lr 1e-6 constant (slime). Trainer on 1 GPU (TP=1); generator gets 4 (TP=4).
+    # slime stabilizers: clip-higher (0.2/0.28) + KL-to-reference (low_var_kl, 0.001).
+    # lr 1e-6 constant. Trainer on 1 GPU (TP=1); generator gets 4 (TP=4).
     config.trainer = dataclasses.replace(
         config.trainer,
         loss=GRPOLoss.Config(
@@ -348,11 +346,14 @@ def rl_grpo_qwen3_1_7b_search_r1() -> RLTrainer.Config:
             config.trainer.parallelism, tensor_parallel_degree=1
         ),
     )
-    config.num_groups_per_rollout_batch = (
-        8  # 8 prompts x group_size 8 = 64 rollouts/step
-    )
-    config.num_steps = 100
-    # Eval on NQ test (slime-style): every 5 steps, 500 prompts (clean EM trend).
+    # 16 prompts x group_size 8 = 128 rollouts per batch; the token budget collects
+    # batches to fill global_batch_size. Dynamic sampling drops zero-std groups and
+    # oversamples to keep the train batch full of groups with a learning signal.
+    config.num_groups_per_rollout_batch = 16
+    config.dynamic_sampling = True
+    config.max_rollout_batches_per_step = 6
+    config.num_steps = 500
+    # Eval on NQ test (slime-style): every 5 steps, first 500 prompts (file order).
     config.validation_freq = 5
     config.num_validation_samples = 500
     # Log a sample rollout per group each step so trajectories are inspectable.

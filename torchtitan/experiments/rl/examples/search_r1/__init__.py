@@ -11,15 +11,17 @@ from torchtitan.experiments.rl.examples.search_r1.data import (
 from torchtitan.experiments.rl.examples.search_r1.env import SearchR1Env
 from torchtitan.experiments.rl.examples.search_r1.rollouter import SearchR1Rollouter
 from torchtitan.experiments.rl.examples.search_r1.rubric import (
+    compute_score_em,
     RewardAnswerEM,
-    RewardFormat,
+    RewardSearchR1,
 )
 
 __all__ = [
     "RewardAnswerEM",
-    "RewardFormat",
+    "RewardSearchR1",
     "SearchR1Dataset",
     "SearchR1Env",
     "SearchR1Example",
     "SearchR1Rollouter",
+    "compute_score_em",
 ]

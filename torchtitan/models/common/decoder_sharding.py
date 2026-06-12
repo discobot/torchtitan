@@ -7,6 +7,7 @@
 import spmd_types as spmd
 
 from torchtitan.distributed.parallel_dims import MeshAxisName
+from torchtitan.distributed.utils import get_spmd_backend
 
 from torchtitan.models.common.attention import FusedQKVLinear, GQAttention, QKVLinear
 from torchtitan.protocols.sharding import LocalMapConfig, ShardingConfig, SpmdLayout
@@ -181,8 +182,21 @@ def set_gqa_attention_sharding(attention_cfg, *, enable_sp: bool) -> None:
         },
     )
     if attention_cfg.rope is not None:
+        qk_layout = dense_activation_placement(tp=spmd.S(2))
         attention_cfg.rope.sharding_config = ShardingConfig(
             state_shardings={"cache": dense_param_placement(tp=spmd.R)},
+            in_src_shardings={
+                "query": qk_layout,
+                "key": qk_layout,
+                # positions is not activation but layout applies
+                "positions": dense_activation_placement(tp=spmd.R),
+            },
+            out_src_shardings=(qk_layout, qk_layout),
+            local_map=(
+                LocalMapConfig(in_grad_placements=None)
+                if get_spmd_backend() == "spmd_types"
+                else None
+            ),
         )
     set_qkv_linear_sharding(attention_cfg.qkv_linear)
     attention_cfg.wo.sharding_config = rowwise_config(output_sp=enable_sp)

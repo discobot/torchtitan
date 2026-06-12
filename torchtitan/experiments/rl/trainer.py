@@ -357,6 +357,13 @@ class RLTrainer(Configurable):
         mostly zero-std cannot oversample without bound; on hitting the cap the step
         trains on whatever was collected."""
 
+        advantage_std_normalization: bool = False
+        """Standard GRPO advantage: ``A = (reward - group_mean) / (group_std + eps)``
+        (divide by the group's reward std). False (default) = mean-baseline only
+        (Dr.GRPO), which decouples step size from reward variance. slime/Search-R1
+        uses True (``grpo_std_normalization``): it up-weights high-uncertainty groups
+        (few-of-N correct), i.e. the hard, search-dependent questions."""
+
         group_size: int = 8
         """Sibling rollouts sampled per dataset row (the GRPO group). The generator
         is always called with `n=1`; prompts are pre-expanded by `group_size`."""
@@ -852,14 +859,20 @@ class RLTrainer(Configurable):
     @sl.log_trace_span("_build_episodes")
     def _build_episodes(
         rollout_groups: list[RolloutGroup],
+        *,
+        std_normalize: bool = False,
     ) -> tuple[list[Episode], list[m.Metric]]:
         """Build train episodes and GRPO advantages from scored rollout groups.
 
-        Centers each group's rewards by its mean, skips rollouts without
+        Centers each group's rewards by its mean (and, when ``std_normalize``,
+        divides by the group reward std — standard GRPO), skips rollouts without
         training tokens, and emits reward/advantage metrics.
 
         Args:
             rollout_groups: Scored rollout groups from one collection round.
+            std_normalize: If True, divide each centered advantage by the group's
+                reward std (+eps) — standard GRPO. If False, mean-baseline only
+                (Dr.GRPO).
 
         Returns:
             Train episodes plus episode-level metrics.
@@ -881,9 +894,12 @@ class RLTrainer(Configurable):
             rewards = [rollout.reward for rollout in group.rollouts]
             group_mean = sum(rewards) / len(rewards)
             group_stds.append(group_std)
+            # Standard GRPO divides by the group std; a zero-std group already has
+            # advantage 0 (reward == mean), so the eps only avoids 0/0.
+            denom = (group_std + 1e-6) if std_normalize else 1.0
 
             for rollout in group.rollouts:
-                rollout.advantage = rollout.reward - group_mean
+                rollout.advantage = (rollout.reward - group_mean) / denom
                 episodes.append(rollout_to_episode(rollout))
 
         num_groups = len(rollout_groups)
@@ -1047,7 +1063,10 @@ class RLTrainer(Configurable):
                 group_offset += num_groups
                 num_rollout_batches += 1
 
-            episodes, episode_metrics = self._build_episodes(rollout_groups)
+            episodes, episode_metrics = self._build_episodes(
+                rollout_groups,
+                std_normalize=self.config.advantage_std_normalization,
+            )
             if self.config.dynamic_sampling:
                 episode_metrics += [
                     m.Metric(
